@@ -7,6 +7,9 @@ import '../app_theme.dart';
 import '../main.dart' show saveLoginState;
 import 'forgot_password_phone.dart';
 
+
+import '../services/FirebaseNotificationService.dart';
+
 class PanelLoginPage extends StatefulWidget {
   const PanelLoginPage({Key? key}) : super(key: key);
 
@@ -19,6 +22,7 @@ class _PanelLoginPageState extends State<PanelLoginPage> {
   final _phoneController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePass = true;
+  bool _isSubmitting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -37,10 +41,7 @@ class _PanelLoginPageState extends State<PanelLoginPage> {
             child: Column(
               children: [
                 const SizedBox(height: 40),
-                Image.asset(
-                  'assets/images/logo.png',
-                  height: 100,
-                ),
+                Image.asset('assets/images/logo.png', height: 100),
                 const SizedBox(height: 20),
                 const Text(
                   'Driver App',
@@ -79,9 +80,8 @@ class _PanelLoginPageState extends State<PanelLoginPage> {
                               prefixIcon: Icon(Icons.person, color: MyAppColors.codGray),
                             ),
                             style: const TextStyle(color: MyAppColors.codGray),
-                            validator: (v) => v == null || v.isEmpty
-                                ? 'Please enter your phone number'
-                                : null,
+                            validator: (v) =>
+                            v == null || v.isEmpty ? 'Please enter your phone number' : null,
                           ),
                           const SizedBox(height: 20),
                           TextFormField(
@@ -99,22 +99,26 @@ class _PanelLoginPageState extends State<PanelLoginPage> {
                               ),
                             ),
                             style: const TextStyle(color: MyAppColors.codGray),
-                            validator: (v) => v == null || v.isEmpty
-                                ? 'Please enter password'
-                                : null,
+                            validator: (v) =>
+                            v == null || v.isEmpty ? 'Please enter password' : null,
                           ),
                           const SizedBox(height: 30),
                           SizedBox(
                             width: double.infinity,
                             height: 50,
                             child: ElevatedButton(
-                              onPressed: () async {
-                                if (_formKey.currentState!.validate()) {
+                              onPressed: _isSubmitting
+                                  ? null
+                                  : () async {
+                                if (!_formKey.currentState!.validate()) return;
+
+                                setState(() => _isSubmitting = true);
+
+                                try {
                                   final loginData = LoginVM(
                                     phoneNo: _phoneController.text,
                                     password: _passwordController.text,
                                   );
-
 
                                   final result = await UserAPI.verifyByPhone(
                                     loginData.phoneNo,
@@ -122,39 +126,62 @@ class _PanelLoginPageState extends State<PanelLoginPage> {
                                   );
 
                                   if (result != null && result['id'] != null) {
-
-                                    final SysUser? user = await UserAPI.getUserById(result['id']);
+                                    final SysUser? user =
+                                    await UserAPI.getUserById(result['id']);
 
                                     if (user != null) {
                                       if (user.userType.toLowerCase() == 'd') {
-
+                                        // persist login
                                         await saveLoginState(user.id.toString());
 
+                                        // 🔔 set current user & register FCM token
+                                        FirebaseNotificationService.setCurrentUser(user);
+                                        await FirebaseNotificationService.registerToken(user.id);
 
-                                        if (!context.mounted) return;
+                                        if (!mounted) return;
                                         Navigator.pushReplacement(
                                           context,
-                                          MaterialPageRoute(builder: (_) => DashboardPage(sysUser: user)),
+                                          MaterialPageRoute(
+                                            builder: (_) => DashboardPage(sysUser: user),
+                                          ),
                                         );
                                       } else {
                                         ScaffoldMessenger.of(context).showSnackBar(
-                                          const SnackBar(content: Text("Only drivers are allowed to login here")),
+                                          const SnackBar(
+                                            content: Text(
+                                                "Only drivers are allowed to login here"),
+                                          ),
                                         );
                                       }
                                     } else {
                                       ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(content: Text("Unable to load user details")),
+                                        const SnackBar(
+                                          content: Text("Unable to load user details"),
+                                        ),
                                       );
                                     }
                                   } else {
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text("Invalid phone number or password")),
+                                      const SnackBar(
+                                        content: Text("Invalid phone number or password"),
+                                      ),
                                     );
                                   }
+                                } catch (e) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text("Login failed: $e")),
+                                  );
+                                } finally {
+                                  if (mounted) setState(() => _isSubmitting = false);
                                 }
                               },
-
-                              child: const Text('Login'),
+                              child: _isSubmitting
+                                  ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                                  : const Text('Login'),
                             ),
                           ),
                           const SizedBox(height: 16),
@@ -164,7 +191,9 @@ class _PanelLoginPageState extends State<PanelLoginPage> {
                             onTap: () {
                               Navigator.push(
                                 context,
-                                MaterialPageRoute(builder: (_) => const ForgotPasswordPhonePage()),
+                                MaterialPageRoute(
+                                  builder: (_) => const ForgotPasswordPhonePage(),
+                                ),
                               );
                             },
                             child: const Text(

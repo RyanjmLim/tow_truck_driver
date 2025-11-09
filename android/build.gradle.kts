@@ -2,14 +2,15 @@
 
 buildscript {
     repositories {
-        google()
+        google()         // ✅ Required for google-services plugin
         mavenCentral()
     }
 
     dependencies {
-        classpath("com.google.gms:google-services:4.3.15")
+        classpath("com.google.gms:google-services:4.3.15") // ✅ Required for Firebase
     }
 }
+
 
 allprojects {
     repositories {
@@ -17,6 +18,8 @@ allprojects {
         mavenCentral()
     }
 }
+
+
 
 val newBuildDir: Directory = rootProject.layout.buildDirectory.dir("../../build").get()
 rootProject.layout.buildDirectory.value(newBuildDir)

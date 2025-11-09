@@ -1,3 +1,4 @@
+// lib/firebase_notification_service.dart
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
@@ -6,87 +7,99 @@ import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
-import 'package:roadside_ast/AppData/AppConstants.dart';
-import 'package:roadside_ast/main.dart';
 
-import '../provider/NotificationProvider.dart';
-import '../view/dashboard.dart'; // 🎯 ADD THIS IMPORT to access navigatorKey
+import '../firebase_bg_handler.dart'; // top-level bg handler (firebaseMessagingBackgroundHandler)
+import '../AppData/AppConstants.dart';
+import '../main.dart';
+
+
+import '../view/dashboard.dart'; // DashboardPage
+import '/model/sys_user.dart';   // SysUser model
 
 class FirebaseNotificationService {
   static final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
-  static final FlutterLocalNotificationsPlugin _localNotifications = FlutterLocalNotificationsPlugin();
+  static final FlutterLocalNotificationsPlugin _localNotifications =
+  FlutterLocalNotificationsPlugin();
+
   static String? _currentToken;
   static int? _registeredUserId;
 
+  // ✅ store the current logged-in SysUser for DashboardPage
+  static SysUser? _currentSysUser;
+  static void setCurrentUser(SysUser user) {
+    _currentSysUser = user;
+  }
+
+  /// Call this once on app startup (e.g., main())
   static Future<void> initialize() async {
-    print('🟡 Initializing Firebase Notifications...');
+    debugPrint('🟡 Initializing Firebase Notifications...');
 
     try {
-      // Initialize local notifications first
+      // 0) Register BG handler (TOP-LEVEL)
+      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+      // 1) Local notifications (channel, init, tap handler)
       await _initializeLocalNotifications();
 
-      // Request permission
-      NotificationSettings settings = await _firebaseMessaging.requestPermission(
+      // 2) Ask permission
+      final settings = await _firebaseMessaging.requestPermission(
         alert: true,
         badge: true,
         sound: true,
         provisional: false,
       );
+      debugPrint('✅ User permission: ${settings.authorizationStatus}');
 
-      print('✅ User granted permission: ${settings.authorizationStatus}');
+      // 3) Token
+      _currentToken = await _firebaseMessaging.getToken();
+      debugPrint('🔑 FCM Token: $_currentToken');
 
-      // Get token
-      String? token = await _firebaseMessaging.getToken();
-      _currentToken = token;
-      print('🔑 FCM Token: $token');
-
-      // Token refresh listener
-      _firebaseMessaging.onTokenRefresh.listen((newToken) {
-        print('🔄 Token refreshed: $newToken');
+      // 4) Token refresh
+      _firebaseMessaging.onTokenRefresh.listen((newToken) async {
+        debugPrint('🔄 Token refreshed: $newToken');
         _currentToken = newToken;
         if (_registeredUserId != null) {
-          registerToken(_registeredUserId!);
+          await registerToken(_registeredUserId!);
         }
       });
 
-      // Handle foreground messages
-      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-        print('📱 Foreground message received!');
+      // 5) Foreground messages
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+        debugPrint('📱 Foreground message received!');
         _logMessageDetails(message);
-        _handleForegroundMessage(message);
+        await _handleForegroundMessage(message);
       });
 
-      // Handle when app is opened from terminated state
-      RemoteMessage? initialMessage = await _firebaseMessaging.getInitialMessage();
+      // 6) App opened from terminated via notification
+      final initialMessage = await _firebaseMessaging.getInitialMessage();
       if (initialMessage != null) {
-        print('🚀 App opened from terminated state with message');
+        debugPrint('🚀 App opened from terminated via notification');
         _logMessageDetails(initialMessage);
-        // Wait for app to be fully built before navigating
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _handleMessageNavigation(initialMessage);
+          _handleMessageNavigation(initialMessage); // 👉 will go to Dashboard
         });
       }
 
-      // Handle when app is in background and opened via notification
+      // 7) App opened from background via notification tap
       FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-        print('📬 App opened from background via notification');
+        debugPrint('📬 App opened from background via notification tap');
         _logMessageDetails(message);
-        _handleMessageNavigation(message);
+        _handleMessageNavigation(message); // 👉 will go to Dashboard
       });
-      FirebaseMessaging.onBackgroundMessage(_handleBackgroundMessage);
-      print('✅ Firebase Notifications initialized successfully');
 
-    } catch (e) {
-      print('❌ Error initializing Firebase: $e');
+      debugPrint('✅ Firebase Notifications initialized successfully');
+    } catch (e, st) {
+      debugPrint('❌ Error initializing Firebase: $e\n$st');
     }
   }
+
+  // ----------------- Local notifications -----------------
 
   static Future<void> _initializeLocalNotifications() async {
     const AndroidInitializationSettings androidSettings =
     AndroidInitializationSettings('@mipmap/ic_launcher');
 
-    const DarwinInitializationSettings iosSettings =
-    DarwinInitializationSettings(
+    const DarwinInitializationSettings iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
       requestSoundPermission: true,
@@ -97,16 +110,14 @@ class FirebaseNotificationService {
       iOS: iosSettings,
     );
 
-    // Handle notification taps
     await _localNotifications.initialize(
       initSettings,
       onDidReceiveNotificationResponse: (NotificationResponse response) {
-        print('👆 Notification tapped! Payload: ${response.payload}');
-        _handleNotificationTap(response.payload);
+        debugPrint('👆 Notification tapped! Payload: ${response.payload}');
+        _handleNotificationTap(response.payload); // 👉 will go to Dashboard
       },
     );
 
-    // Create notification channel for Android
     if (Platform.isAndroid) {
       const AndroidNotificationChannel channel = AndroidNotificationChannel(
         'high_importance_channel',
@@ -117,109 +128,89 @@ class FirebaseNotificationService {
       );
 
       await _localNotifications
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
           ?.createNotificationChannel(channel);
     }
 
-    print('✅ Local notifications initialized');
+    debugPrint('✅ Local notifications initialized');
   }
+
+  // ----------------- BG handler bridge (called by top-level) -----------------
+
+  /// Called by the top-level background handler to reuse your logic.
+  static void handleBackground(RemoteMessage message) {
+    debugPrint('📱 [BG bridge] message: ${message.messageId}');
+    _logMessageDetails(message);
+
+    // Store to history even if BG
+    final title =
+        message.notification?.title ?? message.data['title'] ?? 'Notification';
+    final body = message.notification?.body ?? message.data['body'] ?? '';
+
+  }
+
+  // ----------------- Navigation helpers (ALWAYS DASHBOARD) -----------------
 
   static void _handleNotificationTap(String? payload) {
-    print('👆 Handling notification tap with payload: $payload');
-
-    if (payload != null && payload.isNotEmpty) {
-      try {
-        final data = jsonDecode(payload) as Map<String, dynamic>;
-        print('📊 Parsed notification data: $data');
-        _handleMessageNavigationFromData(data);
-      } catch (e) {
-        print('❌ Error parsing notification payload: $e');
-      }
-    } else {
-      print('⚠️ No payload received from notification tap');
-    }
-  }
-
-  static void _handleMessageNavigationFromData(Map<String, dynamic> data) {
-    print('🧭 Handling navigation from data: $data');
-
-    final caseId = data['caseId']?.toString();
-    final type = data['type']?.toString();
-
-    print('🔍 Extracted - Case ID: $caseId, Type: $type');
-
-    if (caseId != null && caseId.isNotEmpty) {
-      final parsedCaseId = int.tryParse(caseId);
-      if (parsedCaseId != null) {
-        _navigateToCaseDetails(parsedCaseId);
-      } else {
-        print('❌ Could not parse caseId: $caseId');
-      }
-    } else {
-      print('❌ No caseId found in notification data');
-    }
+    // Ignore payload, always route to dashboard
+    _goToDashboard();
   }
 
   static void _handleMessageNavigation(RemoteMessage message) {
-    print('🧭 Handling message navigation');
-    _handleMessageNavigationFromData(message.data);
+    // Ignore payload, always route to dashboard
+    _goToDashboard();
   }
 
-  static void _navigateToCaseDetails(int caseId) {
-    print('➡️ Attempting to navigate to case details: $caseId');
+  static void _handleMessageNavigationFromData(Map<String, dynamic> data) {
+    // Ignore payload, always route to dashboard
+    _goToDashboard();
+  }
 
+  static void _goToDashboard() {
     if (navigatorKey.currentState == null) {
-      print('❌ Navigator key currentState is null');
+      debugPrint('❌ navigatorKey.currentState is null; cannot navigate.');
       return;
     }
 
-    if (navigatorKey.currentContext == null) {
-      print('❌ Navigator key currentContext is null');
+    if (_currentSysUser == null) {
+      debugPrint('⚠️ current SysUser is null; pop to root as fallback.');
+      navigatorKey.currentState!.popUntil((route) => route.isFirst);
       return;
     }
 
-    try {
-      // Import your CaseDetailsScreen and navigate to it
-      navigatorKey.currentState!.push(
-        MaterialPageRoute(
-          builder: (context) => CaseDetailsScreen(caseId: caseId),
-        ),
-      );
-      print('✅ Successfully navigated to case details: $caseId');
-    } catch (e) {
-      print('❌ Navigation error: $e');
-    }
+    // Clear the stack and go to DashboardPage(sysUser: ...)
+    navigatorKey.currentState!.pushAndRemoveUntil(
+      MaterialPageRoute(
+        builder: (_) => DashboardPage(sysUser: _currentSysUser!),
+      ),
+          (route) => false,
+    );
+
+
   }
+
+  // ----------------- Foreground display -----------------
 
   static Future<void> _handleForegroundMessage(RemoteMessage message) async {
     try {
-      print('🎯 Processing foreground message...');
-
       String title;
       String body;
 
-      // 🎯 PRIORITIZE DATA PAYLOAD OVER NOTIFICATION PAYLOAD
       if (message.data.containsKey('title') || message.data.containsKey('body')) {
         title = message.data['title'] ?? 'Case Update';
         body = message.data['body'] ?? 'Your case has been updated';
-        print('✅ Using DATA payload (custom messages)');
       } else if (message.notification != null) {
         title = message.notification!.title ?? 'No Title';
         body = message.notification!.body ?? 'No Body';
-        print('⚠️ Using NOTIFICATION payload (fallback)');
       } else {
         title = 'Case Update';
         body = 'Your case has been updated';
-        print('🔶 Using default fallback');
       }
 
-      print('📢 Final Title: "$title"');
-      print('📢 Final Body: "$body"');
 
-      // 🎯 ADD TO NOTIFICATION HISTORY
-      _addToNotificationHistory(message, title, body);
 
-      AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      const androidDetails = AndroidNotificationDetails(
         'high_importance_channel',
         'High Importance Notifications',
         channelDescription: 'This channel is used for important notifications',
@@ -232,156 +223,120 @@ class FirebaseNotificationService {
         color: Color(0xFFD32F2F),
       );
 
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
+      const iosDetails = DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
       );
 
-      NotificationDetails details = NotificationDetails(
+      final details = const NotificationDetails(
         android: androidDetails,
         iOS: iosDetails,
       );
 
-      final notificationId = DateTime.now().millisecondsSinceEpoch.remainder(100000);
+      final id = DateTime.now().millisecondsSinceEpoch.remainder(100000);
 
       await _localNotifications.show(
-        notificationId,
+        id,
         title,
         body,
         details,
-        payload: jsonEncode(message.data),
+        payload: jsonEncode(message.data), // even if ignored, it's OK to keep
       );
 
-      print('✅ Foreground notification displayed! ID: $notificationId');
-
-    } catch (e) {
-      print('❌ Error in foreground message: $e');
+      debugPrint('✅ Foreground notification displayed (ID: $id)');
+    } catch (e, st) {
+      debugPrint('❌ Foreground error: $e\n$st');
     }
   }
 
-// 🎯 NEW METHOD: Add notification to history
-  static void _addToNotificationHistory(RemoteMessage message, String title, String body) {
-    try {
-      // Get the provider using navigatorKey - FIXED VERSION
-      if (navigatorKey.currentContext != null) {
-        final notificationProvider = Provider.of<NotificationProvider>(
-            navigatorKey.currentContext!,
-            listen: false
-        );
-        notificationProvider.addNotification(message);
-        print('📝 Added notification to history: $title');
-      } else {
-        print('⚠️ Could not access NotificationProvider - context not available');
-        // Store notification temporarily and add when context is available
-        _storePendingNotification(message);
-      }
-    } catch (e) {
-      print('❌ Error adding notification to history: $e');
-      _storePendingNotification(message);
-    }
-  }
+  // ----------------- History helpers -----------------
 
-// Store pending notifications when context is not available
-  static List<RemoteMessage> _pendingNotifications = [];
+  static final List<RemoteMessage> _pendingNotifications = [];
+
+
 
   static void _storePendingNotification(RemoteMessage message) {
     _pendingNotifications.add(message);
-    print('📦 Stored pending notification: ${message.messageId}');
+    debugPrint('📦 Stored pending notification: ${message.messageId}');
   }
 
-// Process pending notifications when context becomes available
-  static void processPendingNotifications() {
-    if (_pendingNotifications.isNotEmpty && navigatorKey.currentContext != null) {
-      print('🔄 Processing ${_pendingNotifications.length} pending notifications');
-      final notificationProvider = Provider.of<NotificationProvider>(
-          navigatorKey.currentContext!,
-          listen: false
-      );
 
-      for (final message in _pendingNotifications) {
-        notificationProvider.addNotification(message);
-      }
-      _pendingNotifications.clear();
-      print('✅ Pending notifications processed');
-    }
-  }
 
-  // Handle background messages too
-  static Future<void> _handleBackgroundMessage(RemoteMessage message) async {
-    print('📱 Background message received!');
-    _logMessageDetails(message);
-
-    // Add to history even for background messages
-    String title = message.notification?.title ?? message.data['title'] ?? 'Notification';
-    String body = message.notification?.body ?? message.data['body'] ?? '';
-    _addToNotificationHistory(message, title, body);
-  }
+  // ----------------- Token register/unregister -----------------
 
   static Future<void> registerToken(int userId) async {
     try {
-      print('🟡 Registering token for user $userId...');
+      debugPrint('🟡 Registering token for user $userId...');
+      _currentToken ??= await _firebaseMessaging.getToken();
 
-      if (_currentToken == null) {
-        print('⏳ Token not ready, waiting...');
-        await Future.delayed(Duration(seconds: 2));
-        _currentToken = await _firebaseMessaging.getToken();
+      if ((_currentToken ?? '').isEmpty) {
+        debugPrint('❌ No FCM token available yet.');
+        return;
       }
 
-      if (_currentToken != null && _currentToken!.isNotEmpty) {
-        final response = await http.post(
-          Uri.parse('${AppConstants.BASE_URI}/FirebaseToken/register'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'userID': userId,
-            'deviceToken': _currentToken,
-            'platform': Platform.isAndroid ? 'Android' : 'iOS',
-            'deviceID': _getDeviceId(),
-          }),
-        );
+      final url = '${AppConstants.BASE_URI}/FirebaseToken/register';
+      final body = {
+        'userID': userId, // ⚠️ sysUserID
+        'deviceToken': _currentToken,
+        'platform': Platform.isAndroid ? 'Android' : 'iOS',
+        'deviceID': _getDeviceId(),
+      };
 
-        if (response.statusCode == 200) {
-          _registeredUserId = userId;
-          print('✅ Firebase token registered successfully for user $userId');
-          print('📝 Token: ${_currentToken!.substring(0, 20)}...');
-        } else {
-          print('❌ Failed to register token: ${response.statusCode} - ${response.body}');
-        }
+      // 🧪 Extra logging starts here
+      debugPrint('➡️ POST $url');
+      debugPrint('   Body: $body');
+
+      final resp = await http.post(
+        Uri.parse(url),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
+      );
+
+      debugPrint('⬅️ ${resp.statusCode} ${resp.reasonPhrase}');
+      debugPrint('   Body: ${resp.body}');
+      // 🧪 Extra logging ends here
+
+      if (resp.statusCode == 200) {
+        _registeredUserId = userId;
+        debugPrint('✅ Token registered for user $userId');
       } else {
-        print('❌ No token available to register');
+        debugPrint('❌ Register failed: ${resp.statusCode} - ${resp.body}');
       }
-    } catch (e) {
-      print('❌ Error registering Firebase token: $e');
+    } catch (e, st) {
+      debugPrint('❌ Register token error: $e\n$st');
     }
   }
+
 
   static Future<void> unregisterToken() async {
     try {
-      if (_currentToken != null) {
-        final response = await http.post(
-          Uri.parse('${AppConstants.BASE_URI}/FirebaseToken/unregister'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'deviceToken': _currentToken,
-          }),
-        );
+      if ((_currentToken ?? '').isEmpty) return;
 
-        if (response.statusCode == 200) {
-          _registeredUserId = null;
-          print('✅ Firebase token unregistered successfully');
-        }
+      final resp = await http.post(
+        Uri.parse('${AppConstants.BASE_URI}/FirebaseToken/unregister'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'deviceToken': _currentToken}),
+      );
+
+      if (resp.statusCode == 200) {
+        _registeredUserId = null;
+        debugPrint('✅ Token unregistered');
+      } else {
+        debugPrint('❌ Unregister failed: ${resp.statusCode} - ${resp.body}');
       }
-    } catch (e) {
-      print('❌ Error unregistering token: $e');
+    } catch (e, st) {
+      debugPrint('❌ Unregister token error: $e\n$st');
     }
   }
 
-  static String _getDeviceId() {
-    return '${Platform.operatingSystem}_${DateTime.now().millisecondsSinceEpoch}';
-  }
+  // ----------------- Utils -----------------
+
+  static String _getDeviceId() =>
+      '${Platform.operatingSystem}_${DateTime.now().millisecondsSinceEpoch}';
 
   static void _logMessageDetails(RemoteMessage message) {
-    print('''
+    debugPrint('''
 📨 NOTIFICATION DETAILS:
    Title: ${message.notification?.title}
    Body: ${message.notification?.body}
@@ -391,7 +346,7 @@ class FirebaseNotificationService {
   }
 
   static void printDebugInfo() {
-    print('''
+    debugPrint('''
 🔍 FIREBASE DEBUG INFO:
    Current Token: $_currentToken
    Registered User ID: $_registeredUserId

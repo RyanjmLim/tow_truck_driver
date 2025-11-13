@@ -3,7 +3,8 @@ import '/api/user_api.dart';
 import '/model/sys_user.dart';
 import '../app_theme.dart';
 import '../main.dart' show clearLoginState;
-import 'login.dart'; // Ensure this exports PanelLoginPage or adjust accordingly
+import 'login.dart';
+import '../services/FirebaseNotificationService.dart';
 
 class UpdateDetailsPage extends StatefulWidget {
   final int userId;
@@ -497,8 +498,15 @@ class _UpdateDetailsPageState extends State<UpdateDetailsPage> {
                                 ),
                               ),
                               onPressed: () async {
+                                // 🔴 1. Unregister FCM token
+                                await FirebaseNotificationService.unregisterToken();
+
+                                // 🔴 2. Clear login state (SharedPreferences, provider, etc.)
                                 await clearLoginState();
+
                                 if (!mounted) return;
+
+                                // 🔴 3. Navigate to login & remove all previous routes
                                 Navigator.pushAndRemoveUntil(
                                   context,
                                   MaterialPageRoute(builder: (_) => const PanelLoginPage()),
@@ -522,6 +530,7 @@ class _UpdateDetailsPageState extends State<UpdateDetailsPage> {
                     ),
                   ),
                 ),
+
               ],
             ),
           ),

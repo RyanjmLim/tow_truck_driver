@@ -40,10 +40,16 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
 
   final _etaController = TextEditingController();
 
-  String _getFileName(String fullPath) {
-    return fullPath.split('/').last;
+  // ---- DB stamping helpers (match stored procedure behavior) ----
+  bool get _hasArrivedBreakdown => _incidentCase?.arrivedAtBreakdownTime != null;
+
+  /// Return non-null DateTime to trigger DB NOW() via stored procedure,
+  /// or null to leave column unchanged. Only triggers if DB column still NULL.
+  DateTime? _dbNowOrNullForBreakdown() {
+    return _hasArrivedBreakdown ? null : DateTime.now();
   }
 
+  String _getFileName(String fullPath) => fullPath.split('/').last;
 
   @override
   void initState() {
@@ -66,18 +72,15 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
     }
 
     setState(() {
-      _proofAtBreakdownPhoto = incident?.proofAtBreakdownPhoto;
       _incidentCase = incident;
       _ownerDetails = owner;
       _driverLog = driverLog;
       _selectedTime = etaTime;
       _isCaseCompleted = driverLog?.status == 'DRV_COM';
+      _proofAtBreakdownPhoto = incident?.proofAtBreakdownPhoto;
       _isLoading = false;
     });
-    print('ETA from DB: ${driverLog?.eta}');
   }
-
-
 
   Future<void> _uploadProof() async {
     final picker = ImagePicker();
@@ -109,24 +112,24 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
     final uploaded = await FileServicesAPI.uploadBreakdownProof(file);
 
     if (uploaded != null) {
-      final DateTime now = DateTime.now(); // ✅ define 'now' correctly
-
       final updated = await IncidentCaseAPI.updateOngoingStatus(
         caseID: widget.caseId,
-        status: 'DRV_ARR', // ✅ force status to DRV_ARR
+        status: 'DRV_ARR',
         proofAtBreakdownPhoto: uploaded,
         proofAtPoliceStationPhoto: null,
         proofAtWorkshopPhoto: null,
-        arrivedAtBreakdownTime: now, // ✅ set current time
+        // IMPORTANT: send non-null to trigger DB NOW() ONLY if not set yet
+        arrivedAtBreakdownTime: _dbNowOrNullForBreakdown(),
         arrivedAtPoliceStationTime: null,
         arrivedAtWorkshopTime: null,
+        policeStationLocation: null,
       );
 
       if (updated) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("✅ Photo uploaded & saved")),
         );
-        await _loadData();
+        await _loadData(); // refresh proof + arrivedAt from backend
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("❌ Upload saved but failed to update record")),
@@ -138,8 +141,6 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
       );
     }
   }
-
-
 
   Future<void> _completeCase() async {
     if (_proofAtBreakdownPhoto == null) {
@@ -175,6 +176,7 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
         const SnackBar(content: Text("✅ Case completed.")),
       );
       setState(() => _isCaseCompleted = true);
+      await _loadData();
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("❌ Failed to update status.")),
@@ -315,14 +317,13 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
         controlsBuilder: (_, __) => const SizedBox.shrink(),
         steps: [
           Step(
-            title: const Text("Breakdown Location"),
+            title: Text("${_incidentCase?.type ?? 'Breakdown'} Location"),
             content: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(_incidentCase?.location ?? 'No location'),
                 const SizedBox(height: 10),
 
-                // Show Upload button ONLY if not completed
                 if (!_isCaseCompleted)
                   Row(
                     children: [
@@ -370,10 +371,6 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
                     ],
                   ),
 
-
-
-
-                // ✅ Show Complete Case button only if photo uploaded AND not completed
                 if (_proofAtBreakdownPhoto != null && !_isCaseCompleted)
                   ElevatedButton.icon(
                     icon: const Icon(Icons.done_all),
@@ -385,7 +382,6 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
                     ),
                   ),
 
-                // ✅ Final completion message if already completed
                 if (_isCaseCompleted)
                   const Row(
                     children: [
@@ -399,7 +395,6 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
             isActive: true,
             state: _isCaseCompleted ? StepState.complete : StepState.editing,
           )
-
         ],
       ),
     );
@@ -434,7 +429,7 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: MyAppColors.redDamask,
-        title: const Text("Ongoing Case (Rider)", style: TextStyle(color: Colors.white)),
+        title: const Text("Ongoing Case", style: TextStyle(color: Colors.white)),
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -473,7 +468,6 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
         ),
       ),
     );
-
   }
 
   bool _shouldShowEtaToBreakdown() {
@@ -497,12 +491,12 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
           }
         },
         child: AbsorbPointer(
-          child:TextFormField(
+          child: TextFormField(
             controller: _etaController,
             readOnly: true,
             decoration: InputDecoration(
-              hintText: 'ETA', // Always show as placeholder
-              labelText: _etaController.text.isNotEmpty ? 'ETA' : null, // Float 'ETA' label only if text exists
+              hintText: 'ETA',
+              labelText: _etaController.text.isNotEmpty ? 'ETA' : null,
               filled: true,
               fillColor: Colors.white,
               prefixIcon: const Icon(Icons.access_time),
@@ -566,7 +560,6 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
     ],
   );
 
-
   Widget _buildPhoneRow(String label, String? value) {
     final phone = (value ?? '').trim();
     final hasPhone = phone.isNotEmpty && phone != '—';
@@ -591,5 +584,4 @@ class _OngoingCaseDetailRiderState extends State<OngoingCaseDetailRider> {
       ),
     );
   }
-
 }

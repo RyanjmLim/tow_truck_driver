@@ -51,11 +51,30 @@ class _OngoingCaseDetailState extends State<OngoingCaseDetailDriver> {
   IncidentCaseOwnerDetails? _ownerDetails;
   DriverLog? _driverLog;
 
+  // ---------- DB time stamping helpers (match stored procedure behavior) ----------
+  bool get _hasArrivedBreakdown => _incidentCase?.arrivedAtBreakdownTime != null;
+  bool get _hasArrivedPolice => _incidentCase?.arrivedAtPoliceStationTime != null;
+  bool get _hasArrivedWorkshop => _incidentCase?.arrivedAtWorkshopTime != null;
+
+  /// Return non-null DateTime to trigger DB NOW() once via stored procedure,
+  /// or null to leave the column unchanged. We only trigger if the current DB
+  /// column is still NULL (avoid re-stamping).
+  DateTime? _dbNowOrNull(String key) {
+    if (key == 'Breakdown Location') {
+      return _hasArrivedBreakdown ? null : DateTime.now();
+    } else if (key == 'Police Station') {
+      return _hasArrivedPolice ? null : DateTime.now();
+    } else if (key == 'Car Workshop') {
+      return _hasArrivedWorkshop ? null : DateTime.now();
+    }
+    return null;
+  }
+
   List<Map<String, String>> get _locationSteps {
     final steps = <Map<String, String>>[
       {
         'key': 'Breakdown Location',
-        'title': 'Breakdown Location',
+        'title': '${_incidentCase?.type ?? 'Breakdown'} Location',
         'description': _incidentCase?.location ?? 'Loading...'
       }
     ];
@@ -275,7 +294,6 @@ class _OngoingCaseDetailState extends State<OngoingCaseDetailDriver> {
             backgroundColor: Colors.white,
             foregroundColor: Colors.black87,
             elevation: 3,
-            // allow slight growth in height to avoid cramped 2-line labels
             minimumSize: const Size(110, 44),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
             shape: RoundedRectangleBorder(
@@ -529,7 +547,7 @@ class _OngoingCaseDetailState extends State<OngoingCaseDetailDriver> {
               Text(step['description']!),
               const SizedBox(height: 8),
 
-              // Upload Proof Button
+              // Upload Proof Button (triggers DB time once)
               if (isCurrent && !_isCaseCompleted)
                 Row(
                   children: [
@@ -564,7 +582,6 @@ class _OngoingCaseDetailState extends State<OngoingCaseDetailDriver> {
                           final file = File(pickedFile.path);
                           String? uploadedName;
                           String? status;
-                          DateTime now = DateTime.now();
 
                           if (key == 'Breakdown Location') {
                             uploadedName = await FileServicesAPI.uploadBreakdownProof(file);
@@ -595,9 +612,14 @@ class _OngoingCaseDetailState extends State<OngoingCaseDetailDriver> {
                               proofAtBreakdownPhoto: _proofAtBreakdown,
                               proofAtPoliceStationPhoto: _proofAtPoliceStation,
                               proofAtWorkshopPhoto: _proofAtWorkshop,
-                              arrivedAtBreakdownTime: key == 'Breakdown Location' ? now : null,
-                              arrivedAtPoliceStationTime: key == 'Police Station' ? now : null,
-                              arrivedAtWorkshopTime: key == 'Car Workshop' ? now : null,
+
+                              // IMPORTANT: trigger DB NOW() once, only when arriving at this step
+                              arrivedAtBreakdownTime:
+                              key == 'Breakdown Location' ? _dbNowOrNull(key) : null,
+                              arrivedAtPoliceStationTime:
+                              key == 'Police Station' ? _dbNowOrNull(key) : null,
+                              arrivedAtWorkshopTime:
+                              key == 'Car Workshop' ? _dbNowOrNull(key) : null,
                             );
 
                             if (!mounted) return;
@@ -631,7 +653,8 @@ class _OngoingCaseDetailState extends State<OngoingCaseDetailDriver> {
                           ),
                         ),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: _proofPhotos[key]! ? Colors.white : MyAppColors.redDamask,
+                          backgroundColor:
+                          _proofPhotos[key]! ? Colors.white : MyAppColors.redDamask,
                           side: _proofPhotos[key]!
                               ? const BorderSide(color: Colors.green, width: 1.5)
                               : null,
@@ -680,7 +703,7 @@ class _OngoingCaseDetailState extends State<OngoingCaseDetailDriver> {
 
               const SizedBox(height: 8),
 
-              // Depart to Next Location
+              // Depart to Next Location (NO arrival timestamps here)
               if (_proofPhotos[key] == true &&
                   key != 'Car Workshop' &&
                   isCurrent &&
@@ -841,7 +864,7 @@ class _OngoingCaseDetailState extends State<OngoingCaseDetailDriver> {
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text("✅ Proceeding to Workshop.")),
                           );
-                          await _loadIncidentCase(); // Don't manually update _currentStep
+                          await _loadIncidentCase(); // determine step from backend
                           if (!mounted) return;
                         } else {
                           ScaffoldMessenger.of(context).showSnackBar(

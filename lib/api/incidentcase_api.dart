@@ -174,6 +174,7 @@ class IncidentCaseAPI {
     final url = Uri.parse('$baseUrl/DriverLog/getByDriverLogID/$driverLogID');
 
     try {
+
       final response = await http.get(url);
 
       if (response.statusCode == 200) {

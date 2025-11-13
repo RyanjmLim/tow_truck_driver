@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "684956819031",
+    "project_id": "roadside-assistance-app-88161",
+    "storage_bucket": "roadside-assistance-app-88161.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:684956819031:android:935c8f92eb4ace161bcd12",
+        "android_client_info": {
+          "package_name": "com.example.roadside_ast"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAypfKNNu-EstvWKBFsEnH7cB2x59BB6Sw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:684956819031:android:4e7b1137a460f9d91bcd12",
+        "android_client_info": {
+          "package_name": "com.example.tow_truck_driver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAypfKNNu-EstvWKBFsEnH7cB2x59BB6Sw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
